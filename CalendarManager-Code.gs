@@ -130,7 +130,10 @@ function setLastRun_(key, msg) {
 // ─── WEB APP ──────────────────────────────────────────────────────────────────
 
 function doGet() {
-  return HtmlService.createHtmlOutputFromFile('index')
+  // Settings and the cached preview ride along in the page, so it paints with no round trips.
+  var t = HtmlService.createTemplateFromFile('index');
+  t.boot = JSON.stringify({ settings:getSettingsForUI(), preview:getCachedPreview_() }).replace(/</g, '\\u003c');
+  return t.evaluate()
     .setTitle('Calendar Manager')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
@@ -153,6 +156,8 @@ function testRun() {
 
 function getSettingsForUI() {
   var cfg = loadConfig_();
+  cfg.slackSet = !!cfg.slackToken;      // the token itself never goes to the browser
+  delete cfg.slackToken;
   cfg._lastRuns = getLastRuns_();
   cfg._lastMsgs = getLastMsgs_();
   return cfg;
@@ -169,6 +174,7 @@ function saveSettingsFromUI(data) {
   if (data.lunch)    cfg.lunch    = Object.assign(cfg.lunch,    data.lunch);
   if (data.workHours) cfg.workHours = Object.assign(cfg.workHours, data.workHours);
   saveConfig_(cfg);
+  clearPreviewCache_();
   return { ok: true };
 }
 
@@ -179,6 +185,7 @@ function resetColorsToDefaults() {
   cfg.colors = def.colors;
   cfg.lunch.color = def.lunch.color;
   saveConfig_(cfg);
+  clearPreviewCache_();
   return { ok:true, colors:cfg.colors };
 }
 
@@ -375,6 +382,7 @@ function runBusySync() {
   });
 
   setLastRun_('busy', res.created + ' added · ' + res.deleted + ' removed · ' + res.skipped + ' skipped');
+  clearPreviewCache_();
   return res;
 }
 
@@ -408,6 +416,7 @@ function runColorCoding() {
   });
 
   setLastRun_('colour', res.updated + ' recoloured · ' + res.unchanged + ' already right');
+  clearPreviewCache_();
   return res;
 }
 
@@ -419,7 +428,21 @@ function classifyEvent_(ev, cfg) {
 }
 
 // Dry run for the UI: how the next 7 days WOULD be coloured, with nothing written.
-function getPreview() {
+var PREVIEW_CACHE_KEY = 'calendarManagerPreview';
+function getCachedPreview_() {
+  try { var c = CacheService.getUserCache().get(PREVIEW_CACHE_KEY); return c ? JSON.parse(c) : null; }
+  catch(e) { return null; }
+}
+function clearPreviewCache_() {
+  try { CacheService.getUserCache().remove(PREVIEW_CACHE_KEY); } catch(e) {}
+}
+// force=true recomputes; otherwise a cached preview (kept fresh by syncCalendars) is returned.
+function getPreview(force) {
+  if (!force) { var c = getCachedPreview_(); if (c) return c; }
+  return computePreview_();
+}
+
+function computePreview_() {
   var cfg = loadConfig_(), tz = Session.getScriptTimeZone();
   var now = new Date();
   var from = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -448,7 +471,9 @@ function getPreview() {
       past:   e.getTime() < now.getTime()
     });
   });
-  return { days:days, today:Utilities.formatDate(now, tz, 'yyyy-MM-dd') };
+  var out = { days:days, today:Utilities.formatDate(now, tz, 'yyyy-MM-dd'), computedAt:now.toISOString() };
+  try { CacheService.getUserCache().put(PREVIEW_CACHE_KEY, JSON.stringify(out), 600); } catch(e) {}
+  return out;
 }
 
 // STRUCTURE-FIRST CLASSIFICATION
@@ -579,6 +604,7 @@ function runLunchScheduler() {
     }
   }
 
+  clearPreviewCache_();
   setLastRun_('lunch', res.scheduled + ' added · ' + res.moved + ' moved · ' + res.skipped + ' no free slot');
   return res;
 }
@@ -728,6 +754,7 @@ function syncCalendars() {
     runBusySync();
     runColorCoding();
     runLunchScheduler();
+    try { computePreview_(); } catch(e) {}   // keep the UI's first load instant
   } finally {
     lock.releaseLock();
   }

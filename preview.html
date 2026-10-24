@@ -144,6 +144,7 @@ code{background:var(--surface2);padding:1px 6px;border-radius:4px;font-family:ui
       <span class="ptitle">Preview</span>
       <span class="spacer"></span>
       <label class="chk"><input type="checkbox" id="pv-only"> Only show changes</label>
+      <span class="rs" id="pv-age"></span>
       <button class="btn btn-sm" id="btn-pv">↻ Refresh</button>
     </div>
     <div class="pv-sub">Nothing is changed here. Uses your <em>saved</em> settings. <span class="tag">will change</span> means the event isn't that colour yet; run Colour coding to apply.</div>
@@ -217,7 +218,7 @@ code{background:var(--surface2);padding:1px 6px;border-radius:4px;font-family:ui
 <script>
 (function(){
  var ago=function(m){return new Date(Date.now()-m*60000).toISOString()};
- var settings={personalCalendarId:'you@gmail.com',workCalendarId:'you@darkmatterlabs.org',workDomain:'darkmatterlabs.org',syncDaysAhead:14,slackToken:'',
+ var settings={personalCalendarId:'you@gmail.com',workCalendarId:'you@darkmatterlabs.org',workDomain:'darkmatterlabs.org',syncDaysAhead:14,slackSet:true,
   workHours:{start:'09:00',end:'18:30'},
   keywords:{focus:'focus, deep work',priority:'flight, visa, appointment',nonmeeting:'lecture, webinar',hold:'busy, hold, block, lunch',reminder:'reminder, remind'},
   colors:{default:'NONE',team:'MAUVE',external:'PALE_GREEN',nonmeeting:'BLUE',focus:'PALE_BLUE',priority:'RED',hold:'GRAY',reminder:'PALE_RED',personal:'YELLOW'},
@@ -226,7 +227,7 @@ code{background:var(--surface2);padding:1px 6px;border-radius:4px;font-family:ui
   _lastMsgs:{busy:'0 added · 0 removed · 8 skipped',colour:'0 recoloured · 84 already right',lunch:'0 added · 0 moved · 3 no free slot',slack:'No change (no active meeting)'}};
  var d0=new Date(),d1=new Date(Date.now()+86400000),k=function(d){return d.toISOString().slice(0,10)};
  var lab=function(d){return d.toLocaleDateString('en-GB',{weekday:'long',day:'numeric',month:'short'})};
- var preview={today:k(d0),days:[
+ var preview={today:k(d0),computedAt:ago(1),days:[
   {key:k(d0),label:lab(d0),events:[
    {time:'09:30–10:00',title:'Team standup',color:'MAUVE',cat:'team',reason:'3 DML attendee(s)',change:false,past:true},
    {time:'12:30–13:30',title:'Lunch',color:'YELLOW',cat:'lunch',reason:'managed lunch block',change:false,past:false},
@@ -283,6 +284,7 @@ var JOBS=[
   {id:'slack', icon:'💬',name:'Slack status',  fn:'updateSlackStatus', sum:function(r){return r.msg||'Updated'}}
 ];
 
+var BOOT = null;
 var saved={}, cfg={}, dirty=false, running={};
 
 /* ---------- helpers ---------- */
@@ -333,7 +335,7 @@ function runJob(j,done){
     .withFailureHandler(function(e){running[j.id]=false;log(j.name+': '+e.message,'lerr');$('sec-log').open=true;afterRun(done)})
     [j.fn]();
 }
-function afterRun(done){loadSettings(function(){loadPreview()});if(done)done()}
+function afterRun(done){loadSettings();loadPreview(true,true);if(done)done()}
 
 $('btn-all').onclick=function(){
   var b=$('btn-all');b.disabled=true;
@@ -352,17 +354,18 @@ $('btn-all').onclick=function(){
 
 /* ---------- preview ---------- */
 var lastPreview=null;
-function loadPreview(){
-  $('preview').textContent='';$('preview').appendChild(el('div','empty','Loading…'));
+function loadPreview(force,silent){
+  if(!silent||!lastPreview){$('preview').textContent='';$('preview').appendChild(el('div','empty','Loading…'))}
   google.script.run
     .withSuccessHandler(function(p){lastPreview=p;renderPreview()})
-    .withFailureHandler(function(e){lastPreview={error:e.message};renderPreview()})
-    .getPreview();
+    .withFailureHandler(function(e){if(!silent||!lastPreview)lastPreview={error:e.message};renderPreview()})
+    .getPreview(!!force);
 }
 function renderPreview(){
   var box=$('preview');box.textContent='';
   var p=lastPreview;if(!p)return;
   if(p.error){box.appendChild(el('div','empty',p.error));return}
+  $('pv-age').textContent=p.computedAt?'Updated '+ago(p.computedAt):'';
   var only=$('pv-only').checked,shown=0;
   p.days.forEach(function(d){
     var evs=d.events.filter(function(e){return !only||e.change});
@@ -386,7 +389,7 @@ function renderPreview(){
   });
   if(!shown)box.appendChild(el('div','empty',only?'Everything already has the right colour.':'No events in the next 7 days.'));
 }
-$('btn-pv').onclick=loadPreview;
+$('btn-pv').onclick=function(){loadPreview(true)};
 $('pv-only').onchange=renderPreview;
 
 /* ---------- settings ---------- */
@@ -433,7 +436,7 @@ function renderLunch(){
 function renderCal(){
   var h=cfg.workHours||{};
   $('s-pc').value=cfg.personalCalendarId||'';$('s-wc').value=cfg.workCalendarId||'';$('s-domain').value=cfg.workDomain||'';
-  $('s-days').value=cfg.syncDaysAhead||14;$('s-slack').value=cfg.slackToken||'';
+  $('s-days').value=cfg.syncDaysAhead||14;$('s-slack').value='';$('s-slack').placeholder=cfg.slackSet?'•••••••• saved — type to replace':'xoxp-…';
   $('s-wstart').value=h.start||'09:00';$('s-wend').value=h.end||'18:30';
 }
 function renderSettings(){renderCats();renderKws();renderLunch();renderCal()}
@@ -441,14 +444,16 @@ function renderSettings(){renderCats();renderKws();renderLunch();renderCal()}
 function collect(){
   var keywords={};KWS.forEach(function(k){keywords[k.k]=$('kw-'+k.k).value});
   var colors={};CATS.forEach(function(c){colors[c.k]=(cfg.colors||{})[c.k]||'NONE'});
-  return {
+  var data={
     personalCalendarId:$('s-pc').value.trim(),workCalendarId:$('s-wc').value.trim(),workDomain:$('s-domain').value.trim(),
-    syncDaysAhead:$('s-days').value,slackToken:$('s-slack').value.trim(),
+    syncDaysAhead:$('s-days').value,
     workHours:{start:$('s-wstart').value||'09:00',end:$('s-wend').value||'18:30'},
     keywords:keywords,colors:colors,
     lunch:{enabled:$('l-en').checked,windowStart:$('l-start').value,windowEnd:$('l-end').value,prefer:$('l-prefer').value,
            daysAhead:parseInt($('l-days').value)||7,color:(cfg.lunch||{}).color||'YELLOW'}
   };
+  var tok=$('s-slack').value.trim();if(tok)data.slackToken=tok;   // blank = keep the saved token
+  return data;
 }
 function markDirty(){dirty=true;$('savebar').classList.add('show')}
 function clearDirty(){dirty=false;$('savebar').classList.remove('show')}
@@ -460,13 +465,13 @@ document.addEventListener('input',function(e){if(e.target.closest&&e.target.clos
 $('btn-save').onclick=function(){
   var b=$('btn-save');b.disabled=true;
   google.script.run
-    .withSuccessHandler(function(){b.disabled=false;clearDirty();toast('Settings saved');loadSettings(function(){loadPreview()})})
+    .withSuccessHandler(function(){b.disabled=false;clearDirty();toast('Settings saved');loadSettings();loadPreview(true,true)})
     .withFailureHandler(function(e){b.disabled=false;toast('Save failed: '+e.message)})
     .saveSettingsFromUI(collect());
 };
 $('btn-discard').onclick=function(){cfg=clone(saved);renderSettings();clearDirty()};
 $('btn-reset').onclick=function(){
-  google.script.run.withSuccessHandler(function(){toast('Colours reset');loadSettings(function(){loadPreview()})}).resetColorsToDefaults();
+  google.script.run.withSuccessHandler(function(){toast('Colours reset');loadSettings();loadPreview(true,true)}).resetColorsToDefaults();
 };
 $('btn-clear-slack').onclick=function(){
   log('Clearing Slack status…','linfo');
@@ -489,7 +494,13 @@ function loadSettings(cb){
     .getSettingsForUI();
 }
 setInterval(function(){renderTiles()},60000);
-loadSettings(function(){loadPreview()});
+if(BOOT&&BOOT.settings){
+  saved=BOOT.settings;cfg=clone(saved);renderSettings();renderTiles();
+  if(BOOT.preview){
+    lastPreview=BOOT.preview;renderPreview();
+    if(Date.now()-new Date(BOOT.preview.computedAt).getTime()>120000)loadPreview(true,true);   // refresh quietly if stale
+  }else loadPreview();
+}else{loadSettings();loadPreview()}
 </script>
 </body>
 </html>
