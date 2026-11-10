@@ -147,11 +147,13 @@ label.field{display:block;font-weight:600;font-size:13px;margin-bottom:5px}
 .chg{display:flex;align-items:center;gap:6px;font-size:11.5px;font-weight:700;color:var(--warn);background:var(--warn-soft);border-radius:20px;padding:3px 10px 3px 7px;white-space:nowrap}
 .chg .sw{width:14px;height:14px;border-width:1.5px}
 .ok-tick{color:var(--ok);font-size:14px}
+.mine{display:flex;align-items:center;gap:8px;font-size:11.5px;font-weight:700;color:var(--accent);white-space:nowrap}
+.mine .btn{font-weight:600}
 @media(max-width:620px){
   .ev{grid-template-columns:5px minmax(0,1fr) auto;padding-right:10px}
   .ev-time{grid-column:2/-1;padding:8px 0 0 6px}
   .ev-main{grid-column:2;padding-left:6px;padding-top:0}
-  .ev .chg,.ev .ok-tick{grid-column:3;grid-row:2}
+  .ev .chg,.ev .ok-tick,.ev .mine{grid-column:3;grid-row:2}
 }
 .empty{padding:34px 18px;text-align:center;color:var(--muted)}
 .skel{height:56px;border-bottom:1px solid var(--border);background:linear-gradient(90deg,var(--surface) 0,var(--surface3) 50%,var(--surface) 100%);background-size:200% 100%;animation:sh 1.3s infinite linear}
@@ -254,7 +256,7 @@ body.has-save .toast{bottom:84px}
     </div>
     <button class="btn sm" id="btn-pv" aria-label="Refresh preview">↻ Refresh</button>
   </div>
-  <p class="muted" style="font-size:12.5px;margin:-2px 2px 12px">Nothing here changes your calendar until you press <b>Apply colours</b>. The preview uses your saved rules.</p>
+  <p class="muted" style="font-size:12.5px;margin:-2px 2px 12px">Nothing here changes your calendar until you press <b>Apply colours</b>. The preview uses your saved rules. Recolour any event yourself in Google Calendar and it stays that way; use <b>Hand back</b> to let the rules take over again.</p>
   <div id="preview"></div>
 </section>
 
@@ -532,7 +534,11 @@ function renderPreview(){
       r.appendChild(el('div','ev-time',e.time));
       var main=el('div','ev-main'),t=el('div','ev-title',e.title);t.title=e.title;
       main.appendChild(t);main.appendChild(el('div','ev-why',e.reason));r.appendChild(main);
-      if(e.change&&!e.past){
+      if(e.manual){
+        var m=el('div','mine','Your colour');
+        var hb=el('button','btn sm ghost','Hand back');hb.title='Let your rules colour this event again';
+        hb.onclick=function(){handBack(e,hb)};m.appendChild(hb);r.appendChild(m);
+      }else if(e.change&&!e.past){
         var c=el('div','chg');c.appendChild(sw(e.current||'NONE'));c.appendChild(document.createTextNode('→'));c.appendChild(sw(e.color));
         c.appendChild(document.createTextNode(' '+colour(e.color).l));c.title='Will change from '+colour(e.current||'NONE').l+' to '+colour(e.color).l;r.appendChild(c);
       }else r.appendChild(el('span','ok-tick',e.past?'':'✓'));
@@ -541,6 +547,13 @@ function renderPreview(){
     day.appendChild(list);box.appendChild(day);
   });
   if(!shown)box.appendChild(el('div','empty',onlyChanges?'Nothing needs recolouring 🎉':'No events in the next '+range+' days.'));
+}
+function handBack(e,btn){
+  btn.disabled=true;btn.textContent='…';
+  google.script.run
+    .withSuccessHandler(function(r){if(r&&r.error){toast('Couldn’t hand back: '+r.error);btn.disabled=false;btn.textContent='Hand back';return}toast('Handed back: now '+colour(r.color).l);loadPreview()})
+    .withFailureHandler(function(er){toast('Couldn’t hand back: '+er.message);btn.disabled=false;btn.textContent='Hand back'})
+    .releaseManualColor(e.id);
 }
 $('btn-pv').onclick=loadPreview;
 function setFilter(chg){onlyChanges=chg;$('f-all').setAttribute('aria-pressed',!chg);$('f-chg').setAttribute('aria-pressed',chg);renderPreview()}

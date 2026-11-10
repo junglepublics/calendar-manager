@@ -493,9 +493,37 @@ function runBusySync() {
 // ─── COLOUR CODING ────────────────────────────────────────────────────────────
 // One list call; an event is only written to when its colour is actually wrong.
 
+// MANUAL COLOURS — recolour an event yourself in Google Calendar and the script leaves it alone.
+// The script remembers the colour it last applied to each event (id → colorId, '' = native).
+// If an event's colour is later different, you changed it by hand: it is marked manual ('M')
+// and kept until you hand it back from the web app. Our own Busy and Lunch blocks are always enforced.
+var COLORMAP_KEY      = 'calendarManagerColorMap';
+var COLORMAP_INIT_KEY = 'calendarManagerColorMapInit';
+
+function loadColorMap_() {
+  try { return JSON.parse(PropertiesService.getUserProperties().getProperty(COLORMAP_KEY) || '{}'); }
+  catch(e) { return {}; }
+}
+function saveColorMap_(m) { PropertiesService.getUserProperties().setProperty(COLORMAP_KEY, JSON.stringify(m)); }
+function colorMapReady_()  { return PropertiesService.getUserProperties().getProperty(COLORMAP_INIT_KEY) === '1'; }
+
+// 'ok' already the right colour · 'apply' the script should set it · 'manual' you set it yourself
+function colorStatus_(ev, want, map, ready, owned) {
+  var cur = ev.colorId || '';
+  if (cur === want) return 'ok';
+  if (owned) return 'apply';
+  var stored = map[ev.id];
+  if (stored === 'M') return 'manual';
+  if (stored !== undefined) return cur === stored ? 'apply' : 'manual';   // moved away from what we set
+  if (!ready) return 'apply';                                              // first run: take over once
+  return cur === '' ? 'apply' : 'manual';                                  // new event: a colour already on it is yours
+}
+function isOwnedBlock_(ev) { return isSyncedBusy_(ev) || isManagedLunch_(ev); }
+
 function runColorCoding() {
   var cfg = loadConfig_();
-  var res = { updated:0, unchanged:0, skipped:0, log:[] };
+  var res = { updated:0, unchanged:0, skipped:0, manual:0, log:[] };
+  var map = loadColorMap_(), ready = colorMapReady_(), newMap = {};
   var now = new Date(), end = new Date(now.getTime() + cfg.syncDaysAhead*86400000);
 
   var events;
@@ -508,18 +536,31 @@ function runColorCoding() {
 
     var cls = classifyEvent_(ev, cfg);
     var want = colorId_(cls.color);
-    if ((ev.colorId || '') === want) { res.unchanged++; return; }
+    var st = colorStatus_(ev, want, map, ready, isOwnedBlock_(ev));
 
+    if (st === 'ok') {
+      newMap[ev.id] = map[ev.id] === 'M' ? 'M' : want;
+      res.unchanged++; return;
+    }
+    if (st === 'manual') {
+      if (map[ev.id] !== 'M') res.log.push({type:'ok', msg:'Kept your colour on '+titleOf_(ev)});
+      newMap[ev.id] = 'M';
+      res.manual++; return;
+    }
     try {
       Calendar.Events.patch({ colorId: want || null }, cfg.workCalendarId, ev.id, NO_NOTIFY_);
+      newMap[ev.id] = want;
       res.updated++;
       res.log.push({type:'ok', msg:titleOf_(ev)+' → '+resolveColorName_(cls.color)+' ['+cls.reason+']'});
     } catch(e) {
+      newMap[ev.id] = ev.colorId || '';        // not applied: stay retryable, never mistaken for a manual colour
       res.log.push({type:'err', msg:titleOf_(ev)+' — '+e.message});
     }
   });
 
-  setLastRun_('colour', res.updated + ' recoloured · ' + res.unchanged + ' already right');
+  saveColorMap_(newMap);
+  PropertiesService.getUserProperties().setProperty(COLORMAP_INIT_KEY, '1');
+  setLastRun_('colour', res.updated + ' recoloured · ' + res.unchanged + ' already right' + (res.manual ? ' · ' + res.manual + ' yours' : ''));
   return res;
 }
 
@@ -528,6 +569,25 @@ function classifyEvent_(ev, cfg) {
   if (isSyncedBusy_(ev))   return { cat:'hold',  color:cfg.colors.hold, reason:'synced Busy block' };
   if (isManagedLunch_(ev)) return { cat:'lunch', color:cfg.lunch.color, reason:'managed lunch block' };
   return classify_(titleOf_(ev).toLowerCase(), attendeeEmails_(ev), cfg, hasConferenceLink_(ev), hasException_(ev), descOf_(ev).toLowerCase());
+}
+
+// "Hand back" button: let the rules colour this event again, and apply that colour now.
+function releaseManualColor(eventId) {
+  var lock = LockService.getUserLock();
+  if (!lock.tryLock(20000)) return { error:'Busy, try again in a moment.' };
+  try {
+    var cfg = loadConfig_();
+    var ev = Calendar.Events.get(cfg.workCalendarId, eventId, { fields:
+      'id,summary,description,location,hangoutLink,colorId,eventType,start,end,conferenceData(entryPoints(uri)),attendees(email,self,organizer,resource,responseStatus)' });
+    var cls = classifyEvent_(ev, cfg), want = colorId_(cls.color);
+    if ((ev.colorId || '') !== want) Calendar.Events.patch({ colorId: want || null }, cfg.workCalendarId, ev.id, NO_NOTIFY_);
+    var map = loadColorMap_(); map[ev.id] = want; saveColorMap_(map);
+    return { ok:true, color:resolveColorName_(cls.color), reason:cls.reason };
+  } catch(e) {
+    return { error:e.message };
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 // Dry run for the UI: how the next 7 days WOULD be coloured, with nothing written.
@@ -540,6 +600,7 @@ function getPreview(nDays) {
   try { events = listEvents_(cfg.workCalendarId, from, to); }
   catch(e) { return { error:'Cannot read work calendar. (' + e.message + ')' }; }
 
+  var map = loadColorMap_(), ready = colorMapReady_();
   var days = [], byKey = {};
   events.forEach(function(ev) {
     if (!isTimed_(ev) || (ev.eventType && ev.eventType !== 'default' && ev.eventType !== 'focusTime')) return;
@@ -550,14 +611,17 @@ function getPreview(nDays) {
       days.push(byKey[key]);
     }
     var cls = classifyEvent_(ev, cfg);
+    var manual = colorStatus_(ev, colorId_(cls.color), map, ready, isOwnedBlock_(ev)) === 'manual';
     byKey[key].events.push({
+      id:     ev.id,
       time:   Utilities.formatDate(s, tz, 'HH:mm') + '–' + Utilities.formatDate(e, tz, 'HH:mm'),
       title:  titleOf_(ev) || '(no title)',
-      color:  resolveColorName_(cls.color),
+      color:  manual ? nameFromColorId_(ev.colorId) : resolveColorName_(cls.color),
       cat:    cls.cat,
-      reason: cls.reason,
+      reason: manual ? 'You set this colour · rules would say: ' + cls.reason : cls.reason,
       current: nameFromColorId_(ev.colorId),
-      change: (ev.colorId || '') !== colorId_(cls.color),
+      manual: manual,
+      change: manual ? false : (ev.colorId || '') !== colorId_(cls.color),
       past:   e.getTime() < now.getTime()
     });
   });
