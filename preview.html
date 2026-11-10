@@ -168,7 +168,15 @@ code{background:var(--surface2);padding:1px 6px;border-radius:4px;font-family:ui
       <div id="kw-rows"></div>
       <div class="note">
         Comma-separated, whole words only. <strong>Hold</strong> words (incl. “lunch”) only apply to events with no guests, so a lunch <em>meeting</em> is coloured by who's attending.
-        Add <code>#exception</code> to an event's description to skip every keyword rule for that event.
+      </div>
+      <div class="note" style="border-top:1px solid var(--border);margin-top:10px">
+        <strong>Per-event tags.</strong> Type any of these anywhere in an event's description:
+        <div style="margin:6px 0 2px;line-height:2">
+          <code>#colour:sage</code> force a colour (Google names like sage, grape, tomato, or a category like team, external, focus, or <em>none</em>)<br>
+          <code>#skip</code> never recolour this event<br>
+          <code>#exception</code> ignore keywords; colour by who's attending
+        </div>
+        The preview above shows the reason for every event, so you can check a tag worked.
       </div>
     </div>
   </details>
@@ -235,7 +243,9 @@ code{background:var(--surface2);padding:1px 6px;border-radius:4px;font-family:ui
   {key:k(d1),label:lab(d1),events:[
    {time:'10:00–11:00',title:'xCO portfolio + QCF strategic learnings prezo prep',color:'PALE_GREEN',cat:'external',reason:'1 external attendee(s)',change:false,past:false},
    {time:'16:00–17:00',title:'Focus time',color:'PALE_BLUE',cat:'focus',reason:'focus keyword',change:false,past:false},
-   {time:'17:00–18:00',title:'Call',color:'NONE',cat:'default',reason:'solo, no keyword match',change:false,past:false}]}]};
+   {time:'17:00–18:00',title:'Call',color:'NONE',cat:'default',reason:'solo, no keyword match',change:false,past:false},
+   {time:'17:30–18:30',title:'Lunch (client)',color:'PALE_GREEN',cat:'tag',reason:'#colour:sage',change:true,past:false},
+   {time:'18:00–19:00',title:'Focus time',color:'PALE_BLUE',cat:'skip',reason:'#skip: left as is',change:false,past:false}]}]};
  var replies={getSettingsForUI:settings,getPreview:preview,saveSettingsFromUI:{ok:true},resetColorsToDefaults:{ok:true},
   clearSlackStatus:{ok:true,msg:'Status cleared'},
   runBusySync:{created:0,deleted:0,skipped:8,log:[]},runColorCoding:{updated:1,unchanged:83,skipped:24,log:[{type:'ok',msg:'Lunch with Robyn → Grape [1 DML attendee(s)]'}]},
@@ -275,7 +285,7 @@ var CATS=[
   {k:'reminder',  l:'Reminder',     s:'Reminder events'},
   {k:'personal',  l:'Personal',     s:'Reserved (not used yet)'}
 ];
-var CAT_LABEL={lunch:'Lunch'};CATS.forEach(function(c){CAT_LABEL[c.k]=c.l});
+var CAT_LABEL={lunch:'Lunch',skip:'Left alone',tag:'Tag'};CATS.forEach(function(c){CAT_LABEL[c.k]=c.l});
 var KWS=[{k:'focus',l:'Focus'},{k:'priority',l:'Priority'},{k:'nonmeeting',l:'Non-meeting'},{k:'hold',l:'Hold'},{k:'reminder',l:'Reminder'}];
 var JOBS=[
   {id:'busy',  icon:'📅',name:'Busy sync',     fn:'runBusySync',       sum:function(r){return r.created+' added · '+r.deleted+' removed · '+r.skipped+' skipped'}},

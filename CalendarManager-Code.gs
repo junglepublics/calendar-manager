@@ -269,9 +269,44 @@ function myResponse_(ev) {
 }
 function isAccepted_(ev) { var r = myResponse_(ev); return r === 'owner' || r === 'accepted'; }
 
-// '#exception' anywhere in an event's description turns off all keyword rules
-// for that event, so it is coloured purely by who is attending.
-function hasException_(ev) { return /#exception/i.test(descOf_(ev)); }
+// PER-EVENT TAGS — type these anywhere in an event's description:
+//   #colour:sage     force a colour (Google name, a category like team/external/focus, or none)
+//   #skip            leave this event exactly as it is (never recolour it)
+//   #exception       ignore keyword rules; colour purely by who is attending
+// Google stores descriptions as HTML, so markup is stripped before matching.
+var COLOR_ALIASES_ = { LAVENDER:'PALE_BLUE', SAGE:'PALE_GREEN', GRAPE:'MAUVE', FLAMINGO:'PALE_RED',
+                       BANANA:'YELLOW', TANGERINE:'ORANGE', PEACOCK:'CYAN', GRAPHITE:'GRAY',
+                       BLUEBERRY:'BLUE', BASIL:'GREEN', TOMATO:'RED', NONE:'NONE', NATIVE:'NONE' };
+
+function eventTags_(ev) {
+  var text = descOf_(ev).replace(/<[^>]*>/g, ' ').replace(/&nbsp;|&#160;/g, ' ').replace(/&#35;|&num;/g, '#');
+  var tags = { skip:false, exception:false, color:null };
+  var re = /#\s*(exception|skip|ignore|colou?r)(?:\s*[:=]\s*([a-z_\-]+))?/ig, m;
+  while ((m = re.exec(text))) {
+    var k = m[1].toLowerCase();
+    if (k === 'exception') tags.exception = true;
+    else if (k === 'skip' || k === 'ignore') tags.skip = true;
+    else if (m[2]) tags.color = m[2].toLowerCase();
+  }
+  return tags;
+}
+function hasException_(ev) { return eventTags_(ev).exception; }
+
+// #colour value → a colour name this script understands, or null if it isn't one
+function tagColor_(v, cfg) {
+  v = String(v).toLowerCase().replace(/-/g, '_');
+  if (v === 'lunch') return cfg.lunch.color;
+  if (cfg.colors.hasOwnProperty(v)) return cfg.colors[v];        // a category: team, external, focus, …
+  var u = v.toUpperCase();
+  if (COLOR_ALIASES_[u]) return COLOR_ALIASES_[u];
+  if (VALID_COLOR_NAMES_.indexOf(u) !== -1) return u;
+  return null;
+}
+
+function colorNameFromId_(id) {
+  for (var k in COLOR_IDS_) if (COLOR_IDS_[k] === String(id)) return k;
+  return 'NONE';
+}
 
 // The Lunch block this script creates (not a lunch *meeting* someone else made).
 function isManagedLunch_(ev) { return titleOf_(ev) === 'Lunch' && descOf_(ev).indexOf('lunch-block') !== -1; }
@@ -403,6 +438,7 @@ function runColorCoding() {
     if (!isTimed_(ev) || (ev.eventType && ev.eventType !== 'default' && ev.eventType !== 'focusTime')) { res.skipped++; return; }
 
     var cls = classifyEvent_(ev, cfg);
+    if (cls.skip) { res.skipped++; return; }
     var want = colorId_(cls.color);
     if ((ev.colorId || '') === want) { res.unchanged++; return; }
 
@@ -424,7 +460,16 @@ function runColorCoding() {
 function classifyEvent_(ev, cfg) {
   if (isSyncedBusy_(ev))   return { cat:'hold',  color:cfg.colors.hold, reason:'synced Busy block' };
   if (isManagedLunch_(ev)) return { cat:'lunch', color:cfg.lunch.color, reason:'managed lunch block' };
-  return classify_(titleOf_(ev).toLowerCase(), attendeeEmails_(ev), cfg, hasConferenceLink_(ev), hasException_(ev));
+  var tags = eventTags_(ev);
+  if (tags.skip) return { cat:'skip', skip:true, reason:'#skip: left as is' };
+  var cls = null;
+  if (tags.color) {
+    var c = tagColor_(tags.color, cfg);
+    if (c !== null) return { cat:'tag', color:c, reason:'#colour:' + tags.color };
+  }
+  cls = classify_(titleOf_(ev).toLowerCase(), attendeeEmails_(ev), cfg, hasConferenceLink_(ev), tags.exception);
+  if (tags.color) cls.reason += ' · unknown #colour:' + tags.color;
+  return cls;
 }
 
 // Dry run for the UI: how the next 7 days WOULD be coloured, with nothing written.
@@ -464,10 +509,10 @@ function computePreview_() {
     byKey[key].events.push({
       time:   Utilities.formatDate(s, tz, 'HH:mm') + '–' + Utilities.formatDate(e, tz, 'HH:mm'),
       title:  titleOf_(ev) || '(no title)',
-      color:  resolveColorName_(cls.color),
+      color:  cls.skip ? colorNameFromId_(ev.colorId) : resolveColorName_(cls.color),
       cat:    cls.cat,
       reason: cls.reason,
-      change: (ev.colorId || '') !== colorId_(cls.color),
+      change: cls.skip ? false : (ev.colorId || '') !== colorId_(cls.color),
       past:   e.getTime() < now.getTime()
     });
   });
@@ -761,8 +806,9 @@ function syncCalendars() {
 }
 
 function onCalendarChange() {
+  clearPreviewCache_();   // an edit must never leave a stale preview behind
   var props = PropertiesService.getUserProperties();
-  if (Date.now() - Number(props.getProperty(LASTSYNC_KEY) || 0) < 30000) return;
+  if (Date.now() - Number(props.getProperty(LASTSYNC_KEY) || 0) < 10000) return;
   props.setProperty(LASTSYNC_KEY, String(Date.now()));
   syncCalendars();
   props.setProperty(LASTSYNC_KEY, String(Date.now()));   // swallow the echo from our own writes
