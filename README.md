@@ -17,7 +17,6 @@ What it does:
 | `calendar-manager-index.html` | The web UI (becomes `index.html`) |
 | `index.html` | A redirect to the web app, served by GitHub Pages as the short link |
 | `sync.ps1`, `sync.sh` | Copy the two files into the clasp folder and run `clasp push` |
-| `HANDOVER.md` | Full notes: IDs, deployment, history, open items |
 
 ## Deploying (PowerShell, one line at a time)
 
